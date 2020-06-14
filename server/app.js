@@ -1,45 +1,43 @@
-const express = require('express');
-const path = require('path');
-const utils = require('./lib/hashUtils');
-const partials = require('express-partials');
-const bodyParser = require('body-parser');
-const Auth = require('./middleware/auth');
-const models = require('./models');
+const express = require("express");
+const path = require("path");
+const utils = require("./lib/hashUtils");
+const partials = require("express-partials");
+const bodyParser = require("body-parser");
+const Auth = require("./middleware/auth");
+const models = require("./models");
+const cookieParser = require("./middleware/cookieParser");
 
 const app = express();
 
-app.set('views', `${__dirname}/views`);
-app.set('view engine', 'ejs');
+app.set("views", `${__dirname}/views`);
+app.set("view engine", "ejs");
 app.use(partials());
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
-app.use(express.static(path.join(__dirname, '../public')));
+app.use(express.static(path.join(__dirname, "../public")));
 
+app.use(cookieParser);
+app.use(Auth.createSession);
 
-
-app.get('/', 
-(req, res) => {
-  res.render('index');
+app.get("/", Auth.verifySession, (req, res) => {
+  res.render("index");
 });
 
-app.get('/create', 
-(req, res) => {
-  res.render('index');
+app.get("/create", Auth.verifySession, (req, res) => {
+  res.render("index");
 });
 
-app.get('/links', 
-(req, res, next) => {
+app.get("/links", Auth.verifySession, (req, res, next) => {
   models.Links.getAll()
-    .then(links => {
+    .then((links) => {
       res.status(200).send(links);
     })
-    .error(error => {
+    .error((error) => {
       res.status(500).send(error);
     });
 });
 
-app.post('/links', 
-(req, res, next) => {
+app.post("/links", Auth.verifySession, (req, res, next) => {
   var url = req.body.url;
   if (!models.Links.isValidUrl(url)) {
     // send back a 404 if link is not valid
@@ -47,29 +45,29 @@ app.post('/links',
   }
 
   return models.Links.get({ url })
-    .then(link => {
+    .then((link) => {
       if (link) {
         throw link;
       }
       return models.Links.getUrlTitle(url);
     })
-    .then(title => {
+    .then((title) => {
       return models.Links.create({
         url: url,
         title: title,
         baseUrl: req.headers.origin
       });
     })
-    .then(results => {
+    .then((results) => {
       return models.Links.get({ id: results.insertId });
     })
-    .then(link => {
+    .then((link) => {
       throw link;
     })
-    .error(error => {
+    .error((error) => {
       res.status(500).send(error);
     })
-    .catch(link => {
+    .catch((link) => {
       res.status(200).send(link);
     });
 });
@@ -78,35 +76,97 @@ app.post('/links',
 // Write your authentication routes here
 /************************************************************/
 
-
-
 /************************************************************/
 // Handle the code parameter route last - if all other routes fail
 // assume the route is a short code and try and handle it here.
 // If the short-code doesn't exist, send the user to '/'
 /************************************************************/
 
-app.get('/:code', (req, res, next) => {
+app.get("/signup", (req, res) => {
+  res.render("signup");
+});
 
+app.get("/login", (req, res) => {
+  res.render("login");
+});
+
+app.post("/signup", (req, res) => {
+  var { username, password } = req.body;
+  return models.Users.get({ username })
+    .then((user) => {
+      if (user) {
+        throw user;
+      }
+      return models.Users.create({ username, password });
+    })
+    .then((createdUser) => {
+      return models.Sessions.update({ hash: req.session.hash }, { userId: createdUser.insertId });
+    })
+    .then(() => {
+      res.redirect("/");
+    })
+    .error((error) => {
+      res.status(500).send(error);
+    })
+    .catch((user) => {
+      res.redirect("/signup");
+    });
+});
+
+app.post("/login", (req, res) => {
+  var { username, password } = req.body;
+  return models.Users.get({ username })
+    .then((user) => {
+      if (!user) {
+        throw new Error("User not found");
+      }
+      var match = models.Users.compare(password, user.password, user.salt);
+      if (!match) {
+        throw new Error("Wrong Password");
+      }
+      return models.Sessions.update({ hash: req.session.hash }, { userId: user.id });
+    })
+    .then(() => {
+      res.redirect("/");
+    })
+    .error((error) => {
+      res.status(500).send(error);
+    })
+    .catch(() => {
+      res.redirect("/login");
+    });
+});
+
+app.get("/logout", (req, res) => {
+  return models.Sessions.delete({ hash: req.cookies.shortlyid })
+    .then(() => {
+      res.clearCookie("shortlyid");
+      res.redirect("/login");
+    })
+    .error((error) => {
+      res.status(500).send(error);
+    });
+});
+
+app.get("/:code", (req, res, next) => {
   return models.Links.get({ code: req.params.code })
-    .tap(link => {
-
+    .tap((link) => {
       if (!link) {
-        throw new Error('Link does not exist');
+        throw new Error("Link does not exist");
       }
       return models.Clicks.create({ linkId: link.id });
     })
-    .tap(link => {
+    .tap((link) => {
       return models.Links.update(link, { visits: link.visits + 1 });
     })
     .then(({ url }) => {
       res.redirect(url);
     })
-    .error(error => {
+    .error((error) => {
       res.status(500).send(error);
     })
     .catch(() => {
-      res.redirect('/');
+      res.redirect("/");
     });
 });
 
